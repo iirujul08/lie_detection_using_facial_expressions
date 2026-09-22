@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Facial deviation lie-potential demo
 
 Architecture: React frontend -> FastAPI backend (py-feat AU extraction + deviation
@@ -39,3 +40,6 @@ Open the printed localhost URL. Browser will ask for webcam permission.
 - `session_store.py`: in-memory, single-process. Fine for a demo/viva; swap for a
   real DB before this needs to survive a restart or handle concurrent users.
 - No auth -- add before this is anything but a local demo.
+=======
+# lie_detection_using_facial_expressions
+>>>>>>> eedf026bdffa3be30480a96c8830326a70bb2d2d
