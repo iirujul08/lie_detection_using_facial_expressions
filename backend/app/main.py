@@ -117,9 +117,14 @@ async def score_question(
     response = schemas.QuestionResultResponse(
         session_id=session_id,
         question_id=question_id,
+        deception_probability=result["deception_probability"],
+        baseline_deviation=result["baseline_deviation"],
+        risk_score=result["risk_score"],
+        risk_level=result["risk_level"],
         meter=result["meter"],
         bucket=result["bucket"],
         warnings=result["warnings"],
+        disclaimer=result["disclaimer"],
     )
     session.results.append(response.model_dump())
     return response

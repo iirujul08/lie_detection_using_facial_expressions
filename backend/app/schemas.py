@@ -20,9 +20,14 @@ class BaselineFinalizedResponse(BaseModel):
 class QuestionResultResponse(BaseModel):
     session_id: str
     question_id: str
-    meter: float          # 0-100, for the UI's confidence/lie-potential meter
-    bucket: str            # "Low" | "Medium" | "High"
+    deception_probability: float  # 0.0 to 1.0 (ML model probability)
+    baseline_deviation: float     # 0.0 to 1.0 (Personal baseline deviation)
+    risk_score: float             # 0.0 to 100.0 (Combined deception risk score)
+    risk_level: str               # "Low" | "Medium" | "High"
+    meter: float                  # 0.0 to 100.0 (UI score representation)
+    bucket: str                   # "Low" | "Medium" | "High" (UI category)
     warnings: list[str]
+    disclaimer: str               # Explanatory risk disclaimer
 
 
 class SessionSummaryResponse(BaseModel):

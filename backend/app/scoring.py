@@ -1,26 +1,55 @@
 """
-Turns AU vectors into a presentable "lie potential" score.
+ML + Personal Baseline Deception Scoring Engine.
 
-Two things live here on purpose, kept separate:
-1. build_baseline_profile() -- combines multiple baseline-question AU vectors into
-   one reference profile (mean + std) for a person. Using several samples, not one,
-   is the mitigation for a faked/atypical single baseline answer (see doubt log).
-2. score_against_baseline() -- compares a real-question AU vector to that profile.
+Combines:
+1. ML Model Inference: Calculates deception_probability using trained sklearn pipeline.
+2. Personal Baseline Calibration: Measures facial Action Unit drift (baseline_deviation) relative to session baseline profile.
+3. Hybrid Risk Synthesis: Combines ML probability (60% weight) and personal baseline deviation (40% weight) into risk_score (0-100%).
 
-AU_WEIGHTS is a placeholder (uniform) until a model is trained on labeled
-deceptive/truthful clips to learn which AUs are actually informative. Swap
-load_weights() to read a trained weight vector once that model exists -- nothing
-else in this file needs to change.
+IMPORTANT:
+This metric is a statistical signal drift indicator and risk estimate, NOT proof of lying.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
+
+import joblib
 import numpy as np
 
-N_AUS = 20  # must match len(AU_COLUMNS) in feature_extraction.py
+from .feature_extraction import AU_COLUMNS
 
-# Placeholder: uniform weighting. Replace with trained per-AU importance weights.
-AU_WEIGHTS = np.ones(N_AUS, dtype=np.float64) / N_AUS
 
+# ============================================================
+# PATHS & CONSTANTS
+# ============================================================
+
+MODEL_FILE = Path(__file__).parent / "trained_model.joblib"
+
+DEFAULT_DISCLAIMER = (
+    "DISCLAIMER: Risk score is an ML biometric micro-expression drift estimate "
+    "relative to your personal baseline. It is not proof of lying or deception."
+)
+
+_model = None
+
+
+def get_model():
+    global _model
+
+    if _model is None:
+        if not MODEL_FILE.exists():
+            raise FileNotFoundError(
+                f"Trained model not found: {MODEL_FILE}"
+            )
+
+        _model = joblib.load(MODEL_FILE)
+
+    return _model
+
+
+# ============================================================
+# BASELINE PROFILE
+# ============================================================
 
 @dataclass
 class BaselineProfile:
@@ -28,60 +57,152 @@ class BaselineProfile:
     std: np.ndarray
     n_samples: int
 
-    def flag_low_confidence_inputs(self, min_samples: int = 3) -> list[str]:
+    def flag_low_confidence_inputs(
+        self,
+        min_samples: int = 3
+    ) -> list[str]:
+
         warnings = []
+
         if self.n_samples < min_samples:
             warnings.append(
                 f"Only {self.n_samples} baseline sample(s) collected; "
-                f"recommend at least {min_samples} for a stable baseline."
+                f"recommend at least {min_samples} for a stable baseline profile."
             )
+
         return warnings
 
 
-def build_baseline_profile(baseline_vectors: list[np.ndarray]) -> BaselineProfile:
+def build_baseline_profile(
+    baseline_vectors: list[np.ndarray]
+) -> BaselineProfile:
+
     if not baseline_vectors:
-        raise ValueError("Need at least one baseline sample to build a profile.")
-    stacked = np.stack(baseline_vectors, axis=0)
+        raise ValueError(
+            "Need at least one baseline sample to build a profile."
+        )
+
+    stacked = np.stack(
+        baseline_vectors,
+        axis=0
+    )
+
+    std = stacked.std(axis=0)
+    # Prevent division by zero when calculating Z-scores
+    std = np.where(std == 0, 1e-4, std)
+
     return BaselineProfile(
         mean=stacked.mean(axis=0),
-        std=stacked.std(axis=0),
+        std=std,
         n_samples=stacked.shape[0],
     )
 
 
-def _weighted_cosine_distance(a: np.ndarray, b: np.ndarray, weights: np.ndarray) -> float:
-    """Cosine distance on weighted AU vectors. Chosen over Euclidean because it's
-    more robust to overall intensity/lighting differences between clips -- see
-    feature extraction design notes."""
-    aw, bw = a * weights, b * weights
-    denom = np.linalg.norm(aw) * np.linalg.norm(bw)
+# ============================================================
+# DISTANCE METRICS
+# ============================================================
+
+def _cosine_distance(
+    a: np.ndarray,
+    b: np.ndarray
+) -> float:
+
+    denom = (
+        np.linalg.norm(a)
+        * np.linalg.norm(b)
+    )
+
     if denom == 0:
         return 0.0
-    cosine_sim = np.dot(aw, bw) / denom
-    return 1.0 - cosine_sim
 
+    cosine_similarity = np.dot(a, b) / denom
+    return float(np.clip(1.0 - cosine_similarity, 0.0, 1.0))
+
+
+# ============================================================
+# ML PREDICTION
+# ============================================================
+
+def score_with_model(
+    question_vector: np.ndarray
+) -> float:
+
+    model = get_model()
+
+    features = np.asarray(
+        question_vector,
+        dtype=np.float64
+    ).reshape(1, -1)
+
+    if features.shape[1] != len(AU_COLUMNS):
+        raise ValueError(
+            f"Expected {len(AU_COLUMNS)} AU features, "
+            f"received {features.shape[1]}."
+        )
+
+    probabilities = model.predict_proba(features)[0]
+    classes = list(model.classes_)
+
+    if 1 in classes:
+        deceptive_index = classes.index(1)
+        return float(probabilities[deceptive_index])
+
+    return 0.0
+
+
+# ============================================================
+# FINAL SCORING FUNCTION
+# ============================================================
 
 def score_against_baseline(
     question_vector: np.ndarray,
     profile: BaselineProfile,
-    weights: np.ndarray = AU_WEIGHTS,
 ) -> dict:
-    raw_distance = _weighted_cosine_distance(question_vector, profile.mean, weights)
 
-    # Normalize into a 0-100 "lie potential" meter. This threshold-based bucketing
-    # is a placeholder scale -- calibrate against real session data once you have
-    # some, rather than treating 0.15/0.35 as ground truth.
-    meter = float(np.clip(raw_distance / 0.5, 0.0, 1.0) * 100)
-    if raw_distance < 0.15:
-        bucket = "Low"
-    elif raw_distance < 0.35:
-        bucket = "Medium"
+    question_vector = np.asarray(
+        question_vector,
+        dtype=np.float64
+    )
+
+    # 1. ML Model Probability
+    deception_probability = score_with_model(question_vector)
+
+    # 2. Personal Baseline Deviation
+    raw_cosine = _cosine_distance(question_vector, profile.mean)
+    z_diff = np.abs(question_vector - profile.mean) / profile.std
+    mean_z_drift = float(np.mean(z_diff))
+
+    # Scale deviation metrics to normalized [0.0, 1.0] range
+    scaled_cosine = min(1.0, raw_cosine * 3.5)
+    scaled_z = min(1.0, mean_z_drift / 2.0)
+    baseline_deviation = round(float(0.5 * scaled_cosine + 0.5 * scaled_z), 4)
+
+    # 3. Hybrid Deception Risk Score (0 - 100)
+    # 60% weight on trained ML model + 40% weight on personal baseline drift
+    composite_risk = (0.60 * deception_probability) + (0.40 * baseline_deviation)
+    risk_score = round(float(np.clip(composite_risk * 100.0, 0.0, 100.0)), 1)
+
+    # Risk level categorization
+    if risk_score < 35.0:
+        risk_level = "Low"
+    elif risk_score < 65.0:
+        risk_level = "Medium"
     else:
-        bucket = "High"
+        risk_level = "High"
+
+    # 4. Warnings & Disclaimer
+    warnings = profile.flag_low_confidence_inputs()
+    warnings.append(
+        "Risk score synthesizes trained ML model probabilities with personal facial AU drift."
+    )
 
     return {
-        "raw_distance": raw_distance,
-        "meter": round(meter, 1),
-        "bucket": bucket,
-        "warnings": profile.flag_low_confidence_inputs(),
+        "deception_probability": round(deception_probability, 4),
+        "baseline_deviation": baseline_deviation,
+        "risk_score": risk_score,
+        "risk_level": risk_level,
+        "meter": risk_score,
+        "bucket": risk_level,
+        "warnings": warnings,
+        "disclaimer": DEFAULT_DISCLAIMER,
     }

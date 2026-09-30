@@ -394,12 +394,50 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                <Meter meter={r.meter} bucket={r.bucket} warnings={r.warnings} />
+                <Meter
+                  meter={r.meter}
+                  bucket={r.bucket}
+                  deception_probability={r.deception_probability}
+                  baseline_deviation={r.baseline_deviation}
+                  risk_score={r.risk_score}
+                  risk_level={r.risk_level}
+                  warnings={r.warnings}
+                  disclaimer={r.disclaimer}
+                />
               </div>
             ))
           )}
         </aside>
       )}
+
+      {/* Global Disclaimer Footer */}
+      <footer
+        style={{
+          position: "fixed",
+          bottom: 8,
+          left: 0,
+          right: 0,
+          textAlign: "center",
+          zIndex: 30,
+          pointerEvents: "none",
+        }}
+      >
+        <p
+          className="mono"
+          style={{
+            fontSize: 10,
+            color: "var(--text-faint)",
+            background: "var(--surface)",
+            padding: "2px 12px",
+            borderRadius: 10,
+            display: "inline-block",
+            backdropFilter: "blur(10px)",
+            border: "1px solid var(--line)",
+          }}
+        >
+          ⚖️ Research Estimate: Facial micro-expression drift analysis relative to personal baseline. Not a legal or psychological lie detector.
+        </p>
+      </footer>
     </>
   );
 }
